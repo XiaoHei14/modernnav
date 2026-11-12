@@ -1,41 +1,129 @@
 
 import { NextResponse } from "next/server";
-import { randomBytes } from "crypto";
 
-
+let cachedAccessToken = "";
+let tokenExpiresAt = 0;
 
 export async function GET() {
   const clientId = process.env.SPOTIFY_CLIENT_ID;
-  const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+  const refreshToken = process.env.SPOTIFY_REFRESH_TOKEN;
 
-  if (!clientId || !redirectUri) {
+  const offline = () =>
+    NextResponse.json(
+      { isPlaying: false },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+
+  if (!clientId || !clientSecret || !refreshToken) {
     return NextResponse.json(
       { error: "Missing Spotify environment variables" },
       { status: 500 }
     );
   }
 
-  const state = randomBytes(32).toString("hex");
+  try {
+    // Reuse the access token until shortly before expiry.
+    async function getAccessToken(forceRefresh = false) {
+      if (
+        !forceRefresh &&
+        cachedAccessToken &&
+        Date.now() < tokenExpiresAt - 60000
+      ) {
+        return cachedAccessToken;
+      }
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    response_type: "code",
-    redirect_uri: redirectUri,
-    scope: "user-read-private user-read-email",
-    state,
-  });
+      const credentials = Buffer.from(
+        `${clientId}:${clientSecret}`
+      ).toString("base64");
 
-  const response = NextResponse.redirect(
-    `https://accounts.spotify.com/authorize?${params.toString()}`
-  );
+      const response = await fetch(
+        "https://accounts.spotify.com/api/token",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${credentials}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+          }),
+          cache: "no-store",
+        }
+      );
 
-  response.cookies.set("spotify_oauth_state", state, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/api/spotify",
-    maxAge: 600,
-  });
+      const data = await response.json();
 
-  return response;
+      if (!response.ok || !data.access_token) {
+        throw new Error("Spotify token refresh failed");
+      }
+
+      cachedAccessToken = data.access_token;
+      tokenExpiresAt = Date.now() + data.expires_in * 1000;
+
+      return cachedAccessToken;
+    }
+
+    async function getCurrentlyPlaying(accessToken: string) {
+      return fetch(
+        "https://api.spotify.com/v1/me/player/currently-playing",
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          cache: "no-store",
+        }
+      );
+    }
+
+    let accessToken = await getAccessToken();
+    let response = await getCurrentlyPlaying(accessToken);
+
+    // Retry once if the cached token was rejected.
+    if (response.status === 401) {
+      accessToken = await getAccessToken(true);
+      response = await getCurrentlyPlaying(accessToken);
+    }
+
+    // Spotify returns 204 when nothing is playing.
+    if (response.status === 204 || response.status === 404) {
+      return offline();
+    }
+
+    if (!response.ok) {
+      console.error("Spotify playback API:", response.status);
+      return offline();
+    }
+
+    const data = await response.json();
+
+    if (!data.is_playing || !data.item) {
+      return offline();
+    }
+
+    const track = data.item;
+
+    return NextResponse.json(
+      {
+        isPlaying: true,
+        title: track.name,
+        artist: track.artists
+          ?.map((artist: { name: string }) => artist.name)
+          .join(", "),
+        albumImageUrl: track.album?.images?.[0]?.url ?? null,
+        songUrl: track.external_urls?.spotify ?? null,
+        progressMs: data.progress_ms,
+        durationMs: track.duration_ms,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, private",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("Spotify API error:", error);
+    return offline();
+  }
 }
