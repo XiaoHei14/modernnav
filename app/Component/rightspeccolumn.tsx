@@ -1,3 +1,5 @@
+import SpotifyWidget from "./SpotifyWidget";
+
 const SWATCHES = [
   { id: "01", hex: "#F7ECE6", bg: "bg-[#F7ECE6]", text: "text-[#1A1A1A]", border: "" },
   { id: "02", hex: "#CAA07D", bg: "bg-[#CAA07D]", text: "text-[#1A1A1A]", border: "" },
@@ -27,24 +29,7 @@ export default function RightSpecColumn() {
 
       {/* 04 / Connection Label */}
       <div>
-        <div className="w-full bg-[#CAA07D] text-[#1A1A1A] rounded-2xl p-6">
-          <p className="font-mono text-[10px] tracking-[0.18em] uppercase text-[#1A1A1A]/80 mb-4">
-            04 &nbsp;/&nbsp; CONNECTION LABEL
-          </p>
-          <div className="text-4xl font-bold tracking-tight pb-3 border-b border-[#1A1A1A]/30">
-            DH—01
-          </div>
-          <p className="font-bold text-xs tracking-wide uppercase mt-3">
-            READ. SHARE. BUILD.
-          </p>
-          <p className="font-mono text-[10px] tracking-[0.15em] uppercase text-[#1A1A1A]/75 mt-5">
-            BLOG &nbsp;/&nbsp; X &nbsp;/&nbsp; GITHUB
-          </p>
-        </div>
-
-        <span className="block mt-3 font-mono text-[10px] tracking-[0.18em] text-[#F7ECE6]/50 uppercase">
-          04 — CONNECTION STRIP
-        </span>
+        <SpotifyWidget/>
       </div>
     </>
   );
