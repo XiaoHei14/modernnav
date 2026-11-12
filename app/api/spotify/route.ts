@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 
-export const runtime = "nodejs";
+
 
 export async function GET() {
   const clientId = process.env.SPOTIFY_CLIENT_ID;
