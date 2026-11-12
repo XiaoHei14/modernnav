@@ -1,56 +1,41 @@
-import { NextResponse } from 'next/server';
 
-const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
-const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REFRESH_TOKEN = process.env.SPOTIFY_REFRESH_TOKEN;
+import { NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 
-async function getAccessToken() {
-  const response = await fetch('https://accounts.spotify.com/api/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: REFRESH_TOKEN!,
-    }),
-  });
-
-  const data = await response.json();
-  return data.access_token;
-}
+export const runtime = "nodejs";
 
 export async function GET() {
-  const accessToken = await getAccessToken();
+  const clientId = process.env.SPOTIFY_CLIENT_ID;
+  const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
 
-  const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  if (response.status === 204 || response.status > 400) {
-    return NextResponse.json({ isPlaying: false });
+  if (!clientId || !redirectUri) {
+    return NextResponse.json(
+      { error: "Missing Spotify environment variables" },
+      { status: 500 }
+    );
   }
 
-  const song = await response.json();
+  const state = randomBytes(32).toString("hex");
 
-  if (!song.item) {
-    return NextResponse.json({ isPlaying: false });
-  }
-
-  const isPlaying = song.is_playing;
-  const title = song.item.name;
-  const artist = song.item.artists.map((_artist: any) => _artist.name).join(', ');
-  const albumImageUrl = song.item.album.images[0]?.url;
-  const songUrl = song.item.external_urls.spotify;
-
-  return NextResponse.json({
-    isPlaying,
-    title,
-    artist,
-    albumImageUrl,
-    songUrl,
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: "code",
+    redirect_uri: redirectUri,
+    scope: "user-read-private user-read-email",
+    state,
   });
+
+  const response = NextResponse.redirect(
+    `https://accounts.spotify.com/authorize?${params.toString()}`
+  );
+
+  response.cookies.set("spotify_oauth_state", state, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/api/spotify",
+    maxAge: 600,
+  });
+
+  return response;
 }

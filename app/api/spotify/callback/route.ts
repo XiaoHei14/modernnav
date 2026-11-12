@@ -1,76 +1,102 @@
-import { NextResponse } from 'next/server';
 
-const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
-const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REFRESH_TOKEN = process.env.SPOTIFY_REFRESH_TOKEN;
-const WEBHOOK_URL = 'https://webhook.site/6f3e160f-95d1-4db6-aaa6-580225f84bed';
+import { NextRequest, NextResponse } from "next/server";
 
-const TOKEN_ENDPOINT = 'https://accounts.spotify.com/api/token';
-const NOW_PLAYING_ENDPOINT = 'https://api.spotify.com/v1/me/player/currently-playing';
+export const runtime = "nodejs";
 
-async function getAccessToken() {
-  const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
 
-  const response = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${basic}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: REFRESH_TOKEN!,
-    }),
-  });
+  const code = searchParams.get("code");
+  const state = searchParams.get("state");
+  const error = searchParams.get("error");
 
-  return response.json();
-}
+  const savedState = request.cookies.get(
+    "spotify_oauth_state"
+  )?.value;
 
-export async function GET() {
-  const { access_token } = await getAccessToken();
+  const clientId = process.env.SPOTIFY_CLIENT_ID;
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+  const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
 
-  const response = await fetch(NOW_PLAYING_ENDPOINT, {
-    headers: {
-      Authorization: `Bearer ${access_token}`,
-    },
-  });
-
-  if (response.status === 204 || response.status > 400) {
-    return NextResponse.json({ isPlaying: false });
-  }
-
-  const song = await response.json();
-
-  if (!song.item) {
-    return NextResponse.json({ isPlaying: false });
-  }
-
-  const isPlaying = song.is_playing;
-  const title = song.item.name;
-  const artist = song.item.artists.map((_artist: any) => _artist.name).join(', ');
-  const albumImageUrl = song.item.album.images[0]?.url;
-  const songUrl = song.item.external_urls.spotify;
-
-  const payload = {
-    isPlaying,
-    title,
-    artist,
-    songUrl,
-    timestamp: new Date().toISOString(),
+  const responseHeaders = {
+    "Cache-Control": "no-store, private",
+    "Pragma": "no-cache",
   };
 
-  // 🚀 將資料傳送到你的 webhook
-  try {
-    await fetch(WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    console.error('Failed to send to webhook', error);
+  if (error) {
+    return NextResponse.json(
+      { error: "Spotify authorization denied", detail: error },
+      { status: 400, headers: responseHeaders }
+    );
   }
 
-  return NextResponse.json(payload);
+  if (!code || !state || !savedState || state !== savedState) {
+    return NextResponse.json(
+      { error: "Invalid OAuth state or missing code" },
+      { status: 400, headers: responseHeaders }
+    );
+  }
+
+  if (!clientId || !clientSecret || !redirectUri) {
+    return NextResponse.json(
+      { error: "Spotify configuration missing" },
+      { status: 500, headers: responseHeaders }
+    );
+  }
+
+  try {
+    const credentials = Buffer.from(
+      `${clientId}:${clientSecret}`
+    ).toString("base64");
+
+    const tokenResponse = await fetch(
+      "https://accounts.spotify.com/api/token",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${credentials}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+        }),
+        cache: "no-store",
+      }
+    );
+
+    const data = await tokenResponse.json();
+
+    if (!tokenResponse.ok) {
+      console.error("Spotify token exchange failed:", data);
+
+      return NextResponse.json(
+        { error: "Spotify token exchange failed" },
+        { status: tokenResponse.status, headers: responseHeaders }
+      );
+    }
+
+    const result = NextResponse.json(
+      {
+        success: true,
+        message: "Spotify authorization successful",
+        refresh_token: data.refresh_token,
+        expires_in: data.expires_in,
+        scope: data.scope,
+      },
+      { headers: responseHeaders }
+    );
+
+    result.cookies.delete("spotify_oauth_state");
+
+    return result;
+  } catch (error) {
+    console.error("Spotify callback error:", error);
+
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500, headers: responseHeaders }
+    );
+  }
 }
